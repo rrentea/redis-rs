@@ -30,7 +30,7 @@ fn is_crlf(a: u8, b: u8) -> bool {
     a == b'\r' && b == b'\n'
 }
 
-pub fn parse_request<R: Read>(reader: &mut BufReader<R>) -> Result<Value> {
+pub fn decode<R: Read>(reader: &mut BufReader<R>) -> Result<Value> {
     let mut res: Vec<u8> = Vec::new();
     reader.read_until(b'\n', &mut res)?;
 
@@ -69,7 +69,7 @@ pub fn parse_request<R: Read>(reader: &mut BufReader<R>) -> Result<Value> {
 
             let mut elements: Vec<Value> = Vec::with_capacity(length as usize);
             for _ in 0..length {
-                elements.push(parse_request(reader)?)
+                elements.push(decode(reader)?)
             }
             Ok(Value::Array(elements))
         }
