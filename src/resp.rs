@@ -3,18 +3,115 @@ use std::io::{BufReader, Error, ErrorKind, Read, Result};
 
 #[derive(Debug)]
 pub enum Value {
-    /// Null bulk reply, `$-1\r\n`
     Null,
-    /// Null array reply, `*-1\r\n`
     NullArray,
-    /// For Simple Strings the first byte of the reply is "+".
-    String(String),
-    /// For Errors the first byte of the reply is "-".
-    Error(String),
-    /// For Integers the first byte of the reply is ":".
+    SimpleString(String),
+    SimpleError(String),
     Integer(i64),
-    /// For Arrays the first byte of the reply is "*".
+    BulkString(Vec<u8>),
+    BulkError(Vec<u8>),
     Array(Vec<Value>),
+    Map(Vec<(Value, Value)>),
+    Set(Vec<Value>),
+    Bool(bool),
+}
+
+impl Value {
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            Value::Null => vec![b'$', b'-', b'1', b'\r', b'\n'],
+            Value::NullArray => vec![b'*', b'-', b'1', b'\r', b'\n'],
+            Value::SimpleString(string) => {
+                let mut res = vec![b'+'];
+                string.bytes().for_each(|b| res.push(b));
+                res.push(b'\r');
+                res.push(b'\n');
+                res
+            }
+            Value::SimpleError(string) => {
+                let mut res = vec![b'-'];
+                string.bytes().for_each(|b| res.push(b));
+                res.push(b'\r');
+                res.push(b'\n');
+                res
+            }
+            Value::Integer(num) => {
+                let mut res = vec![b':'];
+                if *num < 0 {
+                    res.push(b'-');
+                }
+                num.to_string().bytes().for_each(|b| res.push(b));
+                res.push(b'\r');
+                res.push(b'\n');
+                res
+            }
+            Value::BulkString(string) => {
+                let mut res = vec![b'$'];
+                string.len().to_string().bytes().for_each(|b| res.push(b));
+                res.push(b'\r');
+                res.push(b'\n');
+                res.extend(string);
+                res.push(b'\r');
+                res.push(b'\n');
+                res
+            }
+            Value::BulkError(string) => {
+                let length: usize = string.len();
+                let mut res = vec![b'!'];
+                length.to_string().bytes().for_each(|b| res.push(b));
+                res.push(b'\r');
+                res.push(b'\n');
+                res.extend(string);
+                res.push(b'\r');
+                res.push(b'\n');
+                res
+            }
+            Value::Array(values) => {
+                let mut res = vec![b'*'];
+                values.len().to_string().bytes().for_each(|b| res.push(b));
+                res.push(b'\r');
+                res.push(b'\n');
+                values
+                    .iter()
+                    .map(|val| val.encode())
+                    .for_each(|bytes| res.extend(bytes));
+                res
+            }
+            Value::Map(maps) => {
+                let mut res = vec![b'%'];
+                maps.len().to_string().bytes().for_each(|b| res.push(b));
+                res.push(b'\r');
+                res.push(b'\n');
+                for (key, value) in maps {
+                    res.extend(key.encode());
+                    res.extend(value.encode());
+                }
+                res
+            }
+            Value::Set(values) => {
+                let mut res = vec![b'~'];
+                values.len().to_string().bytes().for_each(|b| res.push(b));
+                res.push(b'\r');
+                res.push(b'\n');
+                values
+                    .iter()
+                    .map(|val| val.encode())
+                    .for_each(|bytes| res.extend(bytes));
+                res
+            }
+            Value::Bool(b) => {
+                let mut res = vec![b'#'];
+                if *b {
+                    res.push(b't');
+                } else {
+                    res.push(b'f');
+                }
+                res.push(b'\r');
+                res.push(b'\n');
+                res
+            },
+        }
+    }
 }
 
 fn parse_string(buf: &[u8]) -> Result<String> {
@@ -37,8 +134,8 @@ pub fn decode<R: Read>(reader: &mut BufReader<R>) -> Result<Value> {
     let len = res.len();
     let bytes = res[1..len - 2].as_ref();
     match res[0] {
-        b'+' => parse_string(bytes).map(Value::String),
-        b'-' => parse_string(bytes).map(Value::Error),
+        b'+' => parse_string(bytes).map(Value::SimpleString),
+        b'-' => parse_string(bytes).map(Value::SimpleError),
         b':' => parse_integer(bytes).map(Value::Integer),
         b'$' => {
             let length = parse_integer(bytes)?;
@@ -59,7 +156,7 @@ pub fn decode<R: Read>(reader: &mut BufReader<R>) -> Result<Value> {
             }
 
             buf.truncate(length);
-            parse_string(buf.as_slice()).map(Value::String)
+            parse_string(buf.as_slice()).map(Value::SimpleString)
         }
         b'*' => {
             let length = parse_integer(bytes)?;
